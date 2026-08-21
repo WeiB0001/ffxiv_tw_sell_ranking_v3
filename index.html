@@ -377,7 +377,7 @@
     <b>評比方式：</b>划算度 = 日均銷量<sup>w₁</sup> × 平均成交價<sup>w₂</sup> × 行情係數<sup>w₃</sup>，並將榜首標準化為 100 分。<br>
     <b>行情係數</b> = 目前最低掛牌價 ÷ 平均成交價（限制在 0.25–2.0）：<span class="ratio-hi">綠色 &gt; 1.05</span> 代表現在掛牌價高於近期成交均價、賣出更有利；<span class="ratio-lo">紅色 &lt; 0.95</span> 代表正在被砍價、現在賣會低於行情。<br>
     <b>消化天數</b> = 目前在售量 ÷ 日均銷量，代表市場上現有的貨要幾天才賣得完。<span class="clear-fast">低於 2 天</span>是缺貨、掛上去很快被吃掉；<span class="clear-slow">高於 14 天</span>是塞車，日均銷量再漂亮也得排隊。這欄要按「抓成交明細」才有資料。<br>
-    <b>價格精算</b>：Universalis 的平均成交價是所有成交的直接平均，一筆離譜的高價或洗價就會把它拉歪。按「抓成交明細，重算均價與在售量」會拉回最近 50 筆實際成交，先取中位數，再用 MAD（絕對離差中位數）把偏離超過 3 倍標準差等效距離的成交剔除，然後對剩下的取平均。<span style="color:var(--sky)">藍色的均價</span>代表已經清洗過，滑鼠移上去可看原始均價與中位數；「剔除」欄是被判定為異常而丟掉的筆數。成交少於 4 筆的物品樣本不足，不做清洗。<br>
+    <b>價格精算</b>：Universalis 的平均成交價是所有成交的直接平均，一筆離譜的高價或洗價就會把它拉歪。按「抓成交明細，重算均價與在售量」會拉回最近 30 天內、最多 50 筆實際成交，先取中位數，再用 MAD（絕對離差中位數）把偏離超過 3 倍標準差等效距離的成交剔除，然後對剩下的取平均。<span style="color:var(--sky)">藍色的均價</span>代表已經清洗過，滑鼠移上去可看原始均價與中位數；「剔除」欄是被判定為異常而丟掉的筆數。成交少於 4 筆的物品樣本不足，不做清洗，沿用原始均價。若有批次沒抓到，狀態列會告訴你缺幾批，再按一次即可補齊。<br>
     <b>雇員時薪</b> = 單趟帶回數量 × 平均成交價 × (1 − 市場稅) ÷ 單趟時數。委托類型選單一項時，表格只留下該類委托並依時薪排序，可以直接比較採礦、採伐、捕魚、狩獵哪一類最賺。<br>
     <b>日均金流</b> = 日均銷量 × 平均成交價，代表這個物品市場每天流動的吉爾規模。<br>
     數據為 Universalis 玩家上傳的眾包資料，冷門物品可能較舊；點物品名稱可跳到貝爾市場小屋查看完整價格與取得方式。
@@ -897,40 +897,84 @@ function collect(data, out){
 }
 
 /* ================= 價格精算（第二輪：成交明細 + 在售量） ================= */
+async function fetchJSONRetry(url, attempts = 3){
+  let last;
+  for (let a = 0; a < attempts; a++){
+    try{
+      const r = await fetch(url);
+      if (r.status === 404) return null;                    // 這批沒資料，不算失敗
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return await r.json();
+    }catch(e){
+      last = e;
+      if (a < attempts - 1) await new Promise(res => setTimeout(res, 900 * (a + 1)));
+    }
+  }
+  throw last;
+}
+/* Universalis 多物品回物件、單一物品直接回本體，統一成陣列 */
+function normItems(data){
+  if (!data) return [];
+  const it = data.items;
+  if (Array.isArray(it)) return it;
+  if (it && typeof it === "object") return Object.keys(it).map(k => it[k]).filter(Boolean);
+  if (data.itemID) return [data];
+  return [];
+}
+
 $("refineBtn").onclick = async () => {
   if (!S.results.length){ setStatus("先掃描一次再精算價格。", true); return; }
   const N = +$("refineN").value || 300;
   const rows = computeRows().sort((a,b) => b.score - a.score).slice(0, N);
-  if (!rows.length) return;
+  if (!rows.length){ setStatus("目前的條件下沒有物品可以精算。", true); return; }
+
   const btn = $("refineBtn"); btn.disabled = true;
   const ids = rows.map(r => r.id);
-  const batches = [];
-  for (let i = 0; i < ids.length; i += 100) batches.push(ids.slice(i, i + 100));
+  const t = encodeURIComponent(S.target);
+
+  // 拆成兩種輕量請求：在售量一批 100 筆，成交明細一批 50 筆（回傳量大很多）
+  const jobs = [];
+  for (let i = 0; i < ids.length; i += 100)
+    jobs.push({ kind:"stock", url:`${UNI}/${t}/${ids.slice(i, i + 100).join(",")}?listings=0&entries=0` });
+  for (let i = 0; i < ids.length; i += 50)
+    jobs.push({ kind:"hist",  url:`${UNI}/history/${t}/${ids.slice(i, i + 50).join(",")}?entriesToReturn=50&entriesWithin=2592000` });
+
+  let done = 0, failed = 0, lastErr = null;
+  setProgress(0, jobs.length, "價格精算中…");
   try{
-    for (let i = 0; i < batches.length; i++){
-      setProgress(i, batches.length, `抓成交明細… 第 ${i + 1}/${batches.length} 批`);
-      const url = `${UNI}/${encodeURIComponent(S.target)}/${batches[i].join(",")}?listings=0&entries=50`;
-      const r = await fetch(url);
-      if (!r.ok) continue;
-      const data = await r.json();
-      const items = data.items || {};
-      for (const k in items){
-        const it = items[k];
-        const hist = (it.recentHistory || [])
-          .filter(e => e && e.pricePerUnit > 0)
-          .map(e => ({ p: e.pricePerUnit, hq: !!e.hq }));
-        S.stock[it.itemID ?? +k] = {
-          units: it.unitsForSale ?? null,
-          listings: it.listingsCount ?? null,
-          hist,
-        };
-      }
+    for (const job of jobs){
+      try{
+        const data = await fetchJSONRetry(job.url);
+        for (const it of normItems(data)){
+          const id = it.itemID; if (!id) continue;
+          const rec = S.stock[id] || (S.stock[id] = { units:null, listings:null, hist:null });
+          if (job.kind === "stock"){
+            if (it.unitsForSale != null) rec.units = it.unitsForSale;
+            if (it.listingsCount != null) rec.listings = it.listingsCount;
+          } else {
+            rec.hist = (it.entries || [])
+              .filter(e => e && e.pricePerUnit > 0)
+              .map(e => ({ p: e.pricePerUnit, hq: !!e.hq }));
+          }
+        }
+      }catch(e){ failed++; lastErr = e; }      // 單批失敗不影響其他批
+      done++;
+      setProgress(done, jobs.length, `價格精算中… ${done}/${jobs.length} 批` + (failed ? `（${failed} 批沒抓到）` : ""));
+      await new Promise(res => setTimeout(res, 120));       // 對 Universalis 客氣一點
     }
-    setProgress(batches.length, batches.length, "價格精算完成");
-    setStatus(`已用最近成交明細重算前 ${N.toLocaleString()} 名的均價與在售量。`);
+
     render();
+    if (failed >= jobs.length){
+      setStatus("價格精算沒有拿到任何資料：" + ((lastErr && lastErr.message) || "連線失敗") +
+                "。稍後再試，或把精算範圍改成前 300 名。", true);
+    } else if (failed){
+      setStatus(`已重算前 ${N.toLocaleString()} 名，其中 ${failed}/${jobs.length} 批沒抓到（伺服器忙碌），` +
+                `這些物品沿用原始均價。可以再按一次補齊。`);
+    } else {
+      setStatus(`已用最近成交明細重算前 ${N.toLocaleString()} 名的均價與在售量。`);
+    }
   }catch(e){
-    setStatus("價格精算失敗：" + e.message, true);
+    setStatus("價格精算中斷：" + e.message, true);
   }finally{ btn.disabled = false; }
 };
 
