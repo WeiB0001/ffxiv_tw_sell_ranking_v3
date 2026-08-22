@@ -130,7 +130,7 @@
 
   /* ---------- table ---------- */
   .tablewrap{overflow-x:auto; border:1px solid var(--line-soft); border-radius:12px; background:var(--panel);}
-  table{border-collapse:collapse; width:100%; min-width:1240px;}
+  table{border-collapse:collapse; width:100%; min-width:1400px;}
   thead th{
     position:sticky; top:0; background:var(--panel3); color:var(--muted);
     font-size:12px; font-weight:600; letter-spacing:.05em; text-align:right;
@@ -169,6 +169,7 @@
   td.cleaned{color:var(--sky); cursor:help;}
   td.dropcount{color:var(--rose);}
   .vph{color:var(--jade); font-weight:600;}
+  .vph-net{color:var(--jade); font-weight:700; background:rgba(95,211,165,.10); border-radius:5px;}
   .clear-fast{color:var(--jade);} .clear-slow{color:var(--rose);}
   td.score{position:relative; min-width:150px;}
   .scorebar{
@@ -282,6 +283,11 @@
         <span class="fieldlabel">市場稅 %</span><input type="number" id="vTax" value="5" min="0" max="20" step="1">
         <label class="check"><input type="checkbox" id="vOnly"> 只留下這個雇員派得動的委托</label>
       </div>
+      <div class="row">
+        <span class="fieldlabel">每天總派遣趟數</span><input type="number" id="vRuns" value="12" min="1" step="1">
+        <span class="fieldlabel">你吃得下的市佔 %</span><input type="number" id="vShare" value="50" min="1" max="100" step="5">
+        <span class="fieldlabel">吸收率 ≥ %</span><input type="number" id="vFill" value="0" min="0" max="100" step="10">
+      </div>
       <p class="note" style="margin-top:12px">
         採集力、鑑別力、裝備品級請照雇員視窗上的數字填。採集力決定「這個委托能不能派」，鑑別力決定「一趟帶回幾個」。
       </p>
@@ -290,8 +296,15 @@
 
   <!-- 評分權重 -->
   <section class="panel">
-    <h2>划算度評比權重</h2>
-    <div class="weights">
+    <h2>排行依據與權重</h2>
+    <div class="row" style="margin-bottom:14px">
+      <span class="fieldlabel">排行依據</span>
+      <div class="chipgroup" id="rankChips">
+        <button class="chip on" data-r="sell">賣出划算度</button>
+        <button class="chip" data-r="venture">🧭 最適合雇員去挖</button>
+      </div>
+    </div>
+    <div class="weights" id="wSell">
       <div class="wcard">
         <div class="wname"><span>日均銷量（賣得動）</span><span class="wval" id="wvVal">1.0</span></div>
         <input type="range" id="wv" min="0" max="2" step="0.1" value="1">
@@ -303,6 +316,16 @@
       <div class="wcard">
         <div class="wname"><span>行情係數（現在賣好不好）</span><span class="wval" id="wrVal">1.0</span></div>
         <input type="range" id="wr" min="0" max="2" step="0.1" value="1">
+      </div>
+    </div>
+    <div class="weights" id="wVenture" hidden>
+      <div class="wcard">
+        <div class="wname"><span>日均銷量（市場吃得下）</span><span class="wval" id="wsvVal">1.0</span></div>
+        <input type="range" id="wsv" min="0" max="2" step="0.1" value="1">
+      </div>
+      <div class="wcard">
+        <div class="wname"><span>雇員時薪（挖得值錢）</span><span class="wval" id="wvhVal">1.0</span></div>
+        <input type="range" id="wvh" min="0" max="2" step="0.1" value="1">
       </div>
     </div>
   </section>
@@ -361,11 +384,12 @@
           <th class="sortable" data-k="unitsForSale">在售量</th>
           <th class="sortable" data-k="daysToClear">消化天數</th>
           <th class="sortable" data-k="flow">日均金流</th>
-          <th class="sortable" data-k="ventureHour">雇員時薪</th>
-          <th class="sortable" data-k="score">賣出划算度</th>
+          <th class="sortable" data-k="ventureHour">理論時薪</th>
+          <th class="sortable" data-k="ventureNet">實收時薪</th>
+          <th class="sortable" id="thScore" data-k="score">賣出划算度</th>
         </tr>
       </thead>
-      <tbody id="tbody"><tr><td colspan="14" class="empty">選好資料中心後按「開始掃描」，掃完的排行會出現在這裡。</td></tr></tbody>
+      <tbody id="tbody"><tr><td colspan="15" class="empty">選好資料中心後按「開始掃描」，掃完的排行會出現在這裡。</td></tr></tbody>
     </table>
   </div>
   <div class="tfoot">
@@ -378,8 +402,9 @@
     <b>行情係數</b> = 目前最低掛牌價 ÷ 平均成交價（限制在 0.25–2.0）：<span class="ratio-hi">綠色 &gt; 1.05</span> 代表現在掛牌價高於近期成交均價、賣出更有利；<span class="ratio-lo">紅色 &lt; 0.95</span> 代表正在被砍價、現在賣會低於行情。<br>
     <b>消化天數</b> = 目前在售量 ÷ 日均銷量，代表市場上現有的貨要幾天才賣得完。<span class="clear-fast">低於 2 天</span>是缺貨、掛上去很快被吃掉；<span class="clear-slow">高於 14 天</span>是塞車，日均銷量再漂亮也得排隊。這欄要按「抓成交明細」才有資料。<br>
     <b>價格精算</b>：Universalis 的平均成交價是所有成交的直接平均，一筆離譜的高價或洗價就會把它拉歪。按「抓成交明細，重算均價與在售量」會拉回最近 30 天內、最多 50 筆實際成交，先取中位數，再用 MAD（絕對離差中位數）把偏離超過 3 倍標準差等效距離的成交剔除，然後對剩下的取平均。<span style="color:var(--sky)">藍色的均價</span>代表已經清洗過，滑鼠移上去可看原始均價與中位數；「剔除」欄是被判定為異常而丟掉的筆數。成交少於 4 筆的物品樣本不足，不做清洗，沿用原始均價。若有批次沒抓到，狀態列會告訴你缺幾批，再按一次即可補齊。<br>
-    <b>雇員時薪</b> = 單趟帶回數量 × 平均成交價 × (1 − 市場稅) ÷ 單趟時數。委托類型選單一項時，表格只留下該類委托並依時薪排序，可以直接比較採礦、採伐、捕魚、狩獵哪一類最賺。<br>
-    <b>日均金流</b> = 日均銷量 × 平均成交價，代表這個物品市場每天流動的吉爾規模。<br>
+    <b>理論時薪</b> = 單趟帶回數量 × 平均成交價 × (1 − 市場稅) ÷ 單趟時數。這是「挖多少賣多少」的上限值，沒有考慮市場吃不吃得下。<br>
+    <b>實收時薪</b>是真正該看的那一欄，把產量壓在市場吞吐量之內：每天產量 = 單趟數量 × 每天總派遣趟數；每天賣得掉 = 日均銷量 × 你吃得下的市佔；兩者取小值才是實際換得到吉爾的量，再除以你投入的總時數。<b>吸收率</b>就是「賣得掉 ÷ 挖得出來」，低於 100% 時會在數字旁邊標紅色百分比，代表這東西單價再漂亮也會積在雇員背包裡。想直接濾掉可以把「吸收率 ≥ %」拉高。<br>
+    <b>雇員適性</b>（排行依據選「最適合雇員去挖」時出現）= 日均銷量<sup>w₁</sup> × 雇員時薪<sup>w₂</sup>，榜首標準化為 100 分。這裡刻意用「理論時薪」而不是「實收時薪」，因為實收時薪本身已經把日均銷量算進去了，再乘一次等於重複計算；用理論時薪相乘，銷量與單位價值才是兩個獨立的維度。切到這個排行時會自動開啟雇員模式，並只保留雇員派得動的物品。<br>    <b>日均金流</b> = 日均銷量 × 平均成交價，代表這個物品市場每天流動的吉爾規模。<br>
     數據為 Universalis 玩家上傳的眾包資料，冷門物品可能較舊；點物品名稱可跳到貝爾市場小屋查看完整價格與取得方式。
   </p>
 </div>
@@ -455,6 +480,7 @@ const S = {
   stock: {},          // id -> {units, listings}
   results: [], scanMeta: "",
   sortKey: "score", sortDesc: true,
+  rankMode: "sell",           // "sell" = 賣出划算度 / "venture" = 最適合雇員去挖
   shown: 100, abort: null,
 };
 
@@ -561,10 +587,10 @@ $("vCatChips").addEventListener("click", e => {
   [...$("vCatChips").children].forEach(x => x.classList.toggle("on", x === b));
   if (V.cat !== "all"){
     if (!V.on){ V.on = true; $("vOn").checked = true; $("retainerBody").hidden = false; }
-    S.sortKey = "ventureHour"; S.sortDesc = true;
-    $("vCatHint").textContent = `目前只看「${(VEN_CAT[V.cat] || {}).n || "全部"}」，依雇員時薪由高到低排序。`;
+    S.sortKey = "ventureNet"; S.sortDesc = true;
+    $("vCatHint").textContent = `目前只看「${(VEN_CAT[V.cat] || {}).n || "全部"}」，依實收時薪由高到低排序。`;
   } else {
-    $("vCatHint").textContent = "選單一類型時，表格只留下該類委托並自動改用「雇員時薪」排序。";
+    $("vCatHint").textContent = "選單一類型時，表格只留下該類委托並自動改用「實收時薪」排序。";
   }
   if (S.results.length) rerank();
 });
@@ -574,8 +600,20 @@ $("vOn").addEventListener("change", () => {
   if (S.results.length) rerank();
 });
 
+/* 排行依據切換 */
+$("rankChips").addEventListener("click", e => {
+  const b = e.target.closest("[data-r]"); if (!b) return;
+  S.rankMode = b.dataset.r;
+  [...$("rankChips").children].forEach(x => x.classList.toggle("on", x === b));
+  const vm = S.rankMode === "venture";
+  $("wSell").hidden = vm; $("wVenture").hidden = !vm;
+  if (vm && !V.on){ V.on = true; $("vOn").checked = true; $("retainerBody").hidden = false; }
+  S.sortKey = vm ? "ventureScore" : "score"; S.sortDesc = true;
+  if (S.results.length) rerank();
+});
+
 /* 權重滑桿 */
-["wv","wa","wr"].forEach(id => {
+["wv","wa","wr","wsv","wvh"].forEach(id => {
   $(id).addEventListener("input", () => {
     $(id + "Val").textContent = Number($(id).value).toFixed(1);
     if (S.results.length) rerank();
@@ -694,6 +732,10 @@ function readCtx(){
     vOnly: $("vOnly").checked,
     tax: Math.min(0.5, Math.max(0, (+$("vTax").value || 0) / 100)),
     hours: Math.max(1/60, (+$("vMin").value || 60) / 60),
+    runs: Math.max(1, +$("vRuns").value || 12),
+    share: Math.min(1, Math.max(0.01, (+$("vShare").value || 50) / 100)),
+    minFill: Math.min(1, Math.max(0, (+$("vFill").value || 0) / 100)),
+    rankMode: S.rankMode,
   };
 }
 
@@ -925,7 +967,8 @@ function normItems(data){
 $("refineBtn").onclick = async () => {
   if (!S.results.length){ setStatus("先掃描一次再精算價格。", true); return; }
   const N = +$("refineN").value || 300;
-  const rows = computeRows().sort((a,b) => b.score - a.score).slice(0, N);
+  const rk = S.rankMode === "venture" ? "ventureScore" : "score";
+  const rows = computeRows().sort((a,b) => (b[rk] || 0) - (a[rk] || 0)).slice(0, N);
   if (!rows.length){ setStatus("目前的條件下沒有物品可以精算。", true); return; }
 
   const btn = $("refineBtn"); btn.disabled = true;
@@ -1009,6 +1052,23 @@ function computeRows(ctx){
     const units = st && st.units != null ? st.units : null;
     const gil = ven ? ven.qty * A * (1 - c.tax) : null;
 
+    // 市場吞吐量上限：每天挖得出來 vs 每天賣得掉
+    let fill = null, dailyGil = null, netHour = null;
+    if (ven){
+      const dailyOut = ven.qty * c.runs;                 // 每天產量
+      const absorb   = V0 * c.share;                     // 每天市場吃得下你的量
+      const sold     = Math.min(dailyOut, absorb);
+      fill      = dailyOut > 0 ? sold / dailyOut : 0;
+      dailyGil  = sold * A * (1 - c.tax);
+      netHour   = dailyGil / (c.runs * c.hours);         // 實收時薪
+    }
+    if (ven && c.minFill > 0 && fill < c.minFill) continue;
+    if (c.rankMode === "venture" && !ven) continue;
+
+    const ventureScore = ven && netHour != null
+      ? Math.pow(V0, +$("wsv").value) * Math.pow(Math.max(1, gil / c.hours), +$("wvh").value)
+      : null;
+
     rows.push({
       id: r.id, name: S.itemNames[r.id] || ("#" + r.id),
       cat: S.itemCat[r.id], catName: S.catNames[S.itemCat[r.id]] || "",
@@ -1024,6 +1084,10 @@ function computeRows(ctx){
       daysToClear: units != null ? units / V0 : null,
       ventureGil: gil,
       ventureHour: gil != null ? gil / c.hours : null,
+      ventureFill: fill,
+      ventureDaily: dailyGil,
+      ventureNet: netHour,
+      ventureScore,
     });
   }
   return rows;
@@ -1066,20 +1130,24 @@ function render(){
   );
   const k = S.sortKey;
   rows.sort((a,b) => (((b[k] ?? -Infinity) - (a[k] ?? -Infinity))) * (S.sortDesc ? 1 : -1));
-  const maxScore = rows.reduce((mx, r) => Math.max(mx, r.score), 0) || 1;
+  const vm = S.rankMode === "venture";
+  const sk = vm ? "ventureScore" : "score";
+  const maxScore = rows.reduce((mx, r) => Math.max(mx, r[sk] || 0), 0) || 1;
+  $("thScore").dataset.k = sk;
+  $("thScore").textContent = vm ? "雇員適性" : "賣出划算度";
 
   const tb = $("tbody"); tb.innerHTML = "";
   if (!rows.length){
-    tb.innerHTML = `<tr><td colspan="14" class="empty">${S.results.length ? "沒有符合條件的物品，放寬版本、取得方式或銷量門檻試試。" : "選好資料中心後按「開始掃描」，掃完的排行會出現在這裡。"}</td></tr>`;
+    tb.innerHTML = `<tr><td colspan="15" class="empty">${S.results.length ? "沒有符合條件的物品，放寬版本、取得方式或銷量門檻試試。" : "選好資料中心後按「開始掃描」，掃完的排行會出現在這裡。"}</td></tr>`;
     $("footInfo").textContent = S.scanMeta; $("moreBtn").style.display = "none";
     return;
   }
   const frag = document.createDocumentFragment();
   rows.slice(0, S.shown).forEach((r, idx) => {
     const tr = document.createElement("tr");
-    if (idx < 3 && S.sortKey === "score" && S.sortDesc) tr.className = "r" + (idx + 1);
+    if (idx < 3 && S.sortKey === sk && S.sortDesc) tr.className = "r" + (idx + 1);
     const rcls = r.ratio > 1.05 ? "ratio-hi" : r.ratio < 0.95 ? "ratio-lo" : "ratio-mid";
-    const sc = r.score / maxScore * 100;
+    const sc = (r[sk] || 0) / maxScore * 100;
     const vcls = r.ver ? "v" + r.ver.major : "";
     const dcls = r.daysToClear == null ? "" : r.daysToClear < 2 ? "clear-fast" : r.daysToClear > 14 ? "clear-slow" : "";
     tr.innerHTML =
@@ -1097,6 +1165,8 @@ function render(){
       `<td class="${dcls}">${r.daysToClear == null ? "—" : fmt1(r.daysToClear)}</td>` +
       `<td>${fmt(r.flow)}</td>` +
       `<td class="${r.ventureHour ? "vph" : ""}">${fmt(r.ventureHour)}</td>` +
+      `<td class="${r.ventureNet ? "vph-net" : ""}"${r.ventureNet != null ? ` title="每天實收 ${fmt(r.ventureDaily)} 吉爾｜市場吸收率 ${Math.round(r.ventureFill * 100)}%"` : ""}>` +
+        `${fmt(r.ventureNet)}${r.ventureFill != null && r.ventureFill < 0.999 ? ` <span class="tag warn">${Math.round(r.ventureFill * 100)}%</span>` : ""}</td>` +
       `<td class="score"><div class="scorebar" style="width:${Math.max(3, sc)}%"></div><span>${sc.toFixed(1)}</span></td>`;
     frag.appendChild(tr);
   });
@@ -1118,17 +1188,19 @@ document.querySelector("thead").addEventListener("click", e => {
   render();
 });
 ["fSearch","fCat","fVel","fPrice","fVerMax","fVerUnknown","fGatherLvl","fNoLimited","fNoFolklore","fRobust",
- "vLvl","vGather","vPerc","vIlvl","vMin","vTax","vOnly"].forEach(id =>
+ "vLvl","vGather","vPerc","vIlvl","vMin","vTax","vOnly","vRuns","vShare","vFill"].forEach(id =>
   $(id).addEventListener("input", () => { if (S.results.length){ S.shown = 100; render(); } })
 );
 $("moreBtn").onclick = () => { S.shown += 100; render(); };
 
 /* CSV 匯出 */
 $("csvBtn").onclick = () => {
-  const rows = computeRows().sort((a,b) => b.score - a.score);
+  const rows = computeRows().sort((a,b) => (b[S.rankMode === "venture" ? "ventureScore" : "score"] || 0) - (a[S.rankMode === "venture" ? "ventureScore" : "score"] || 0));
   if (!rows.length) return;
-  const maxScore = rows[0].score || 1;
-  let csv = "\uFEFF名次,物品ID,物品,分類,版本,採集職業,採集等級,雇員委托,單趟數量,日均銷量,平均成交價,原始均價,剔除筆數,目前最低價,行情係數,在售量,消化天數,日均金流,雇員時薪,賣出划算度\n";
+  const vm = S.rankMode === "venture";
+  const sk = vm ? "ventureScore" : "score";
+  const maxScore = rows[0][sk] || 1;
+  let csv = "\uFEFF名次,物品ID,物品,分類,版本,採集職業,採集等級,雇員委托,單趟數量,日均銷量,平均成交價,原始均價,剔除筆數,目前最低價,行情係數,在售量,消化天數,日均金流,理論時薪,實收時薪,吸收率%,每日實收,排行分數\n";
   rows.forEach((r,i) => {
     const g = r.gather;
     const jobs = g ? ["MIN","BTN","FSH"].filter(j => g[j]).map(j => JOB_NAME[j]).join("/") : "";
@@ -1139,8 +1211,12 @@ $("csvBtn").onclick = () => {
       r.velocity.toFixed(2), Math.round(r.avgPrice), Math.round(r.rawAvg), r.dropped ?? "",
       r.minListing ?? "",
       r.ratio.toFixed(2), r.unitsForSale ?? "", r.daysToClear != null ? r.daysToClear.toFixed(1) : "",
-      Math.round(r.flow), r.ventureHour != null ? Math.round(r.ventureHour) : "",
-      (r.score/maxScore*100).toFixed(1)].join(",") + "\n";
+      Math.round(r.flow),
+      r.ventureHour != null ? Math.round(r.ventureHour) : "",
+      r.ventureNet != null ? Math.round(r.ventureNet) : "",
+      r.ventureFill != null ? Math.round(r.ventureFill * 100) : "",
+      r.ventureDaily != null ? Math.round(r.ventureDaily) : "",
+      ((r[sk] || 0)/maxScore*100).toFixed(1)].join(",") + "\n";
   });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([csv], {type:"text/csv"}));
